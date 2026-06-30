@@ -651,6 +651,7 @@ class Fighter {
     this.airJumpsLeft=1;
     this.charging=false;
     this.charge=0;
+    this.lastFiredCharge=0;
     this.parrying=false;
     this.parryTimer=0;
     this.parryCooldown=0;
@@ -982,6 +983,7 @@ class Fighter {
   fireArrow(game, opponent){
     if(game.over || this.arrows<=0) return;
     this.arrows--;
+    this.lastFiredCharge = this.charge; // Capture the charge before state gets reset in the same frame
     const ang = this.aimAngle;
     const speed = 640 + this.charge*825;
     const vx = Math.cos(ang)*speed;
@@ -1440,6 +1442,7 @@ class Game {
     });
   }
 
+  // Abstraction helpers to cleanly map local/remote fighters
   get localFighter() {
     return this.localPlayerIsLeft ? this.player : this.enemy;
   }
@@ -2053,16 +2056,17 @@ class Game {
           this.localFighter.update(dt, this, this.input, this.remoteFighter);
           
           if (this.localFighter.arrows < oldArrows) {
-            const speed = 640 + this.localFighter.charge * 825;
+            const firedCharge = this.localFighter.lastFiredCharge;
+            const speed = 640 + firedCharge * 825;
             this.conn.send({
               type: 'arrow_fire',
               x: this.localFighter.x + Math.cos(this.localFighter.aimAngle) * 20,
               y: this.localFighter.y - this.localFighter.h * 0.6 + Math.sin(this.localFighter.aimAngle) * 20,
               vx: Math.cos(this.localFighter.aimAngle) * speed,
               vy: Math.sin(this.localFighter.aimAngle) * speed,
-              dmg: 3 + this.localFighter.charge * 14,
-              kb: 14 + this.localFighter.charge * 42,
-              charge: this.localFighter.charge
+              dmg: 3 + firedCharge * 14,
+              kb: 14 + firedCharge * 42,
+              charge: firedCharge
             });
           }
 
