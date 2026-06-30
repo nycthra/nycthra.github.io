@@ -1603,6 +1603,42 @@ class Game {
           this.remoteFighter.takeHit(data.knockback, data.dir, data.dmg, null, this, data.vx, data.vy);
         }
       }
+      else if (data.type === 'parry') {
+        // Opponent successfully parried an arrow, synchronize state, velocity, and properties on this side
+        let bestArrow = null;
+        let minDist = 120; // 120-pixel search radius to handle latency offset
+        for (const a of this.arrows) {
+          const d = Math.hypot(a.x - data.x, a.y - data.y);
+          if (d < minDist) {
+            minDist = d;
+            bestArrow = a;
+          }
+        }
+
+        if (bestArrow) {
+          bestArrow.x = data.x;
+          bestArrow.y = data.y;
+          bestArrow.vx = data.vx;
+          bestArrow.vy = data.vy;
+          bestArrow.owner = this.remoteFighter; // Opponent is now owner of reflected arrow
+          bestArrow.charge = data.charge;
+          bestArrow.knockback = data.knockback;
+          bestArrow.spawnGrace = 0.1;
+        } else {
+          // If no matching arrow was found locally due to positional desync, spawn a new reflected arrow
+          const newArrow = new Arrow(data.x, data.y, data.vx, data.vy, this.remoteFighter, 3 + data.charge * 14, data.knockback, data.charge);
+          newArrow.spawnGrace = 0.1;
+          this.arrows.push(newArrow);
+        }
+
+        // Render sound and visual feedback on the non-parrying screen
+        audio.parry();
+        this.particles.burst(data.x, data.y, 20, 180, 0.4, 3);
+        this.particles.purpleBurst(data.x, data.y, 6);
+        this.particles.parryCharge(data.x, data.y, this.remoteFighter);
+        this.hitstop(0.1);
+        this.shake(8);
+      }
       else if (data.type === 'arrow_fire') {
         const origin = this.remoteFighter;
         const arrow = new Arrow(data.x, data.y, data.vx, data.vy, origin, data.dmg, data.kb, data.charge);
@@ -1960,7 +1996,11 @@ class Game {
         const hitR = 16;
         const bodyHit = Math.abs(dx)<hitR && Math.abs(dy)<hitR+10;
         const parryHit = f.parrying && (bodyHit || f.inParryRange(arrow));
-        if(parryHit){
+        
+        // Multiplayer parry sync: restrict parry evaluation locally to the player performing it
+        const canParry = !this.isMultiplayer || (f === this.localFighter);
+
+        if(parryHit && canParry){
           const reflectDir = f.facing;
           const spd = Math.hypot(arrow.vx, arrow.vy) || 1;
           arrow.vx = reflectDir * spd * 1.35;
@@ -1980,6 +2020,20 @@ class Game {
           f.parrying=false;
           f.parryTimer=0;
           if(f === this.player) this.playerParries++;
+
+          // Send immediate parry packet with reflection vectors to other screen
+          if (this.isMultiplayer) {
+            this.conn.send({
+              type: 'parry',
+              x: arrow.x,
+              y: arrow.y,
+              vx: arrow.vx,
+              vy: arrow.vy,
+              charge: arrow.charge,
+              knockback: arrow.knockback
+            });
+          }
+
           continue;
         }
         if(bodyHit){
