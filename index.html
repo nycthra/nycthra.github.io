@@ -753,11 +753,7 @@ class Fighter {
     this.vx += nx * kbForce;
     this.vy += ny * kbForce * 0.9 - 80;
     if(this.hp <= 0){
-      this.dead = true;
-      audio.death();
-      game.shake(20);
-      game.particles.burst(this.x, this.y, 30, 200, 0.7, 4);
-      game.onDeath(this, true);
+      this.die(game);
     }
   }
 
@@ -1580,8 +1576,18 @@ class Game {
         target.vy = data.vy;
 
         if (!this.isHost) {
-          this.localFighter.hp = data.opponentHp;
-          this.remoteFighter.hp = data.hp;
+          // If Guest detects that the Host claims someone has died, trigger local death
+          if (this.localFighter.hp > 0 && data.opponentHp <= 0) {
+            this.localFighter.die(this);
+          } else {
+            this.localFighter.hp = data.opponentHp;
+          }
+
+          if (this.remoteFighter.hp > 0 && data.hp <= 0) {
+            this.remoteFighter.die(this);
+          } else {
+            this.remoteFighter.hp = data.hp;
+          }
         }
 
         target.facing = data.facing;
@@ -2065,35 +2071,123 @@ class Game {
       dt *= 0.05;
     }
 
-    if(!this.over && this.player && this.enemy){
+    if(this.player && this.enemy){
       const camView = {x:this.camera.x, y:this.camera.y, zoom:this.camera.zoom};
       this.localFighter._aimX = camView.x + this.input.mouse.x/camView.zoom;
       this.localFighter._aimY = camView.y + this.input.mouse.y/camView.zoom;
 
-      if(!this.countdownActive) {
-        if (this.isMultiplayer) {
-          const oldArrows = this.localFighter.arrows;
-          
-          // Local fighter updates controls, physics, and status timers
-          this.localFighter.update(dt, this, this.input, this.remoteFighter);
-          
-          // Remote opponent updates status timers so states like invuln/stun don't get locked permanently
-          this.remoteFighter.updateRemote(dt);
-          
-          if (this.localFighter.arrows < oldArrows) {
-            const firedCharge = this.localFighter.lastFiredCharge;
-            const speed = 640 + firedCharge * 825;
-            this.conn.send({
-              type: 'arrow_fire',
-              x: this.localFighter.x + Math.cos(this.localFighter.aimAngle) * 20,
-              y: this.localFighter.y - this.localFighter.h * 0.6 + Math.sin(this.localFighter.aimAngle) * 20,
-              vx: Math.cos(this.localFighter.aimAngle) * speed,
-              vy: Math.sin(this.localFighter.aimAngle) * speed,
-              dmg: 3 + firedCharge * 14,
-              kb: 14 + firedCharge * 42,
-              charge: firedCharge
-            });
+      if (!this.over) {
+        if(!this.countdownActive) {
+          if (this.isMultiplayer) {
+            const oldArrows = this.localFighter.arrows;
+            
+            this.localFighter.update(dt, this, this.input, this.remoteFighter);
+            this.remoteFighter.updateRemote(dt);
+            
+            if (this.localFighter.arrows < oldArrows) {
+              const firedCharge = this.localFighter.lastFiredCharge;
+              const speed = 640 + firedCharge * 825;
+              this.conn.send({
+                type: 'arrow_fire',
+                x: this.localFighter.x + Math.cos(this.localFighter.aimAngle) * 20,
+                y: this.localFighter.y - this.localFighter.h * 0.6 + Math.sin(this.localFighter.aimAngle) * 20,
+                vx: Math.cos(this.localFighter.aimAngle) * speed,
+                vy: Math.sin(this.localFighter.aimAngle) * speed,
+                dmg: 3 + firedCharge * 14,
+                kb: 14 + firedCharge * 42,
+                charge: firedCharge
+              });
+            }
+
+            if (this.isHost) {
+              this.conn.send({
+                type: 'sync',
+                x: this.localFighter.x,
+                y: this.localFighter.y,
+                vx: this.localFighter.vx,
+                vy: this.localFighter.vy,
+                hp: this.localFighter.hp,
+                opponentHp: this.remoteFighter.hp,
+                facing: this.localFighter.facing,
+                aimAngle: this.localFighter.aimAngle,
+                charging: this.localFighter.charging,
+                charge: this.localFighter.charge,
+                parrying: this.localFighter.parrying,
+                floatActive: this.localFighter.floatActive,
+                arrows: this.localFighter.arrows
+              });
+            } else {
+              this.conn.send({
+                type: 'sync',
+                x: this.localFighter.x,
+                y: this.localFighter.y,
+                vx: this.localFighter.vx,
+                vy: this.localFighter.vy,
+                facing: this.localFighter.facing,
+                aimAngle: this.localFighter.aimAngle,
+                charging: this.localFighter.charging,
+                charge: this.localFighter.charge,
+                parrying: this.localFighter.parrying,
+                floatActive: this.localFighter.floatActive,
+                arrows: this.localFighter.arrows
+              });
+            }
+          } else {
+            this.aiController.update(dt, this, this.enemy, this.player);
+            this.player.update(dt, this, this.input, this.enemy);
+            this.enemy.update(dt, this, this.input, this.player);
           }
+          
+          if(this.fightTimerRunning) {
+            this.fightTimer += dt;
+          }
+        } else {
+          this.player.updateAimAngle(this.enemy);
+          this.enemy.updateAimAngle(this.player);
+
+          this.countdownTimer += dt;
+          if(this.countdownTimer >= 1.0) {
+            this.countdownTimer -= 1.0;
+            this.countdownVal--;
+            const cdEl = document.getElementById('countdown');
+            const tutTxt = document.getElementById('tutorial-text');
+            const tutBox = document.getElementById('tutorial-box');
+
+            if(this.countdownVal === 2) {
+              cdEl.textContent = "2";
+              tutTxt.textContent = "RIGHT CLICK to PARRY. PARRY recharges ARROWS.";
+              audio.tone(440, 0.15, 'sine', 0.15);
+            } else if(this.countdownVal === 1) {
+              cdEl.textContent = "1";
+              tutTxt.textContent = "E to FLOAT. COIN FLIP recharges FLOAT.";
+              audio.tone(440, 0.15, 'sine', 0.15);
+            } else if(this.countdownVal === 0) {
+              cdEl.textContent = "FIGHT!";
+              tutTxt.textContent = "GOOD LUCK!";
+              audio.tone(587.33, 0.4, 'sine', 0.2, 880);
+            } else {
+              cdEl.style.display = 'none';
+              tutBox.style.display = 'none';
+              this.countdownActive = false;
+              this.fightTimer = 0;
+              this.fightTimerRunning = true;
+            }
+          }
+          this.player.vx = 0; this.player.vy = 0;
+          this.player.charging = false; this.player.charge = 0;
+          this.player.x = this.arena.width * 0.3;
+          this.player.y = this.arena.height - 80;
+
+          this.enemy.vx = 0; this.enemy.vy = 0;
+          this.enemy.charging = false; this.enemy.charge = 0;
+          this.enemy.x = this.arena.width * 0.7;
+          this.enemy.y = this.arena.height - 80;
+        }
+      } else {
+        // MATCH IS OVER: Keep running remote timer updates and syncing over the network so state propagation completes cleanly.
+        if (this.isMultiplayer) {
+          this.localFighter.updateRemote(dt);
+          this.remoteFighter.updateRemote(dt);
 
           if (this.isHost) {
             this.conn.send({
@@ -2127,143 +2221,6 @@ class Game {
               floatActive: this.localFighter.floatActive,
               arrows: this.localFighter.arrows
             });
-          }
-        } else {
-          this.aiController.update(dt, this, this.enemy, this.player);
-          this.player.update(dt, this, this.input, this.enemy);
-          this.enemy.update(dt, this, this.input, this.player);
-        }
-        
-        if(this.fightTimerRunning) {
-          this.fightTimer += dt;
-        }
-      } else {
-        this.player.updateAimAngle(this.enemy);
-        this.enemy.updateAimAngle(this.player);
-
-        this.countdownTimer += dt;
-        if(this.countdownTimer >= 1.0) {
-          this.countdownTimer -= 1.0;
-          this.countdownVal--;
-          const cdEl = document.getElementById('countdown');
-          const tutTxt = document.getElementById('tutorial-text');
-          const tutBox = document.getElementById('tutorial-box');
-
-          if(this.countdownVal === 2) {
-            cdEl.textContent = "2";
-            tutTxt.textContent = "RIGHT CLICK to PARRY. PARRY recharges ARROWS.";
-            audio.tone(440, 0.15, 'sine', 0.15);
-          } else if(this.countdownVal === 1) {
-            cdEl.textContent = "1";
-            tutTxt.textContent = "E to FLOAT. COIN FLIP recharges FLOAT.";
-            audio.tone(440, 0.15, 'sine', 0.15);
-          } else if(this.countdownVal === 0) {
-            cdEl.textContent = "FIGHT!";
-            tutTxt.textContent = "GOOD LUCK!";
-            audio.tone(587.33, 0.4, 'sine', 0.2, 880);
-          } else {
-            cdEl.style.display = 'none';
-            tutBox.style.display = 'none';
-            this.countdownActive = false;
-            this.fightTimer = 0;
-            this.fightTimerRunning = true;
-          }
-        }
-        this.player.vx = 0; this.player.vy = 0;
-        this.player.charging = false; this.player.charge = 0;
-        this.player.x = this.arena.width * 0.3;
-        this.player.y = this.arena.height - 80;
-
-        this.enemy.vx = 0; this.enemy.vy = 0;
-        this.enemy.charging = false; this.enemy.charge = 0;
-        this.enemy.x = this.arena.width * 0.7;
-        this.enemy.y = this.arena.height - 80;
-      }
-
-      if (this.localFighter.isFlippingCoin) {
-        this.localFighter.coinFlipTimer -= dt;
-        const coinGraphic = document.getElementById('coin-graphic');
-        
-        if (this.localFighter.coinFlipTimer > 1.4) {
-          const flicker = Math.floor(performance.now() / 60) % 2 === 0;
-          const txt = document.getElementById('coin-text');
-          txt.textContent = flicker ? "[ YES ]" : "[  NO  ]";
-          txt.style.color = '#fff';
-          txt.style.textShadow = '0 0 10px rgba(255,255,255,0.8)';
-          
-          const angleScale = Math.sin(performance.now() * 0.04);
-          if (coinGraphic) {
-            coinGraphic.style.transform = 'scaleX(' + angleScale + ')';
-            const flickerColor = flicker ? '#be78ff' : '#ff3333';
-            coinGraphic.style.background = flickerColor;
-            coinGraphic.style.borderColor = flickerColor;
-            coinGraphic.style.boxShadow = '0 0 8px ' + flickerColor;
-          }
-          
-          if (Math.floor(performance.now() / 120) % 2 === 0 && Math.random() < 0.2) {
-            audio.tone(800 + Math.random()*400, 0.02, 'sine', 0.02);
-          }
-        } else {
-          if (!this.localFighter.coinHasRolledThisCycle) {
-            this.localFighter.coinHasRolledThisCycle = true;
-            const win = Math.random() < 0.5;
-            const txt = document.getElementById('coin-text');
-            
-            if (coinGraphic) {
-              coinGraphic.style.transform = 'scaleX(1)';
-            }
-            
-            if (win) {
-              this.localFighter.floatReady = true;
-              this.localFighter.isFlippingCoin = false;
-              txt.textContent = "[ YES ]";
-              txt.style.color = '#be78ff';
-              txt.style.textShadow = '0 0 15px #be78ff';
-              
-              if (coinGraphic) {
-                coinGraphic.style.background = '#be78ff';
-                coinGraphic.style.borderColor = '#be78ff';
-                coinGraphic.style.boxShadow = '0 0 12px #be78ff';
-              }
-              
-              this.platformPurpleFlashTimer = 0.5;
-              audio.tone(600, 0.25, 'sine', 0.15, 1200);
-              
-              setTimeout(() => {
-                if (!this.localFighter.isFlippingCoin) {
-                  document.getElementById('coin-container').style.display = 'none';
-                }
-              }, 1500);
-            } else {
-              txt.textContent = "[  NO  ]";
-              txt.style.color = '#ff3333';
-              txt.style.textShadow = '0 0 8px rgba(255,51,51,0.5)';
-              
-              if (coinGraphic) {
-                coinGraphic.style.background = '#ff3333';
-                coinGraphic.style.borderColor = '#ff3333';
-                coinGraphic.style.boxShadow = '0 0 6px #ff3333';
-              }
-              audio.tone(180, 0.15, 'sawtooth', 0.1);
-              this.coinFlipFails++;
-            }
-          }
-        }
-        if (this.localFighter.coinFlipTimer <= 0) {
-          this.localFighter.coinFlipTimer = 2.0;
-          this.localFighter.coinHasRolledThisCycle = false;
-        }
-      }
-
-      if (this.remoteFighter.isFlippingCoin && !this.isMultiplayer) {
-        this.remoteFighter.coinFlipTimer -= dt;
-        if (this.remoteFighter.coinFlipTimer <= 0) {
-          const win = Math.random() < 0.5;
-          if (win) {
-            this.remoteFighter.floatReady = true;
-            this.remoteFighter.isFlippingCoin = false;
-          } else {
-            this.remoteFighter.coinFlipTimer = 2.0;
           }
         }
       }
