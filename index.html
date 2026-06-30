@@ -774,6 +774,7 @@ class Fighter {
     game.triggerCountdown();
   }
 
+  // Runs for the local player. Updates physics, input, and state.
   update(dt, game, input, opponent){
     if(this.dead) return;
 
@@ -968,6 +969,25 @@ class Fighter {
     if(this.y > game.arena.height+blast || this.x< -blast || this.x>game.arena.width+blast || this.y < -blast*1.4){
       this.die(game);
     }
+  }
+
+  // Runs for the remote player. Updates active cooldowns and timers so visual and hit status doesn't get locked.
+  updateRemote(dt) {
+    if (this.dead) return;
+    if (this.invuln > 0) this.invuln -= dt;
+    if (this.stunned > 0) this.stunned -= dt;
+    if (this.recoveryTimer > 0) this.recoveryTimer -= dt;
+    if (this.comboTimer > 0) {
+      this.comboTimer -= dt;
+      if (this.comboTimer <= 0) this.comboCount = 0;
+    }
+    if (this.parrying) {
+      this.parryTimer -= dt;
+      if (this.parryTimer <= 0) this.parrying = false;
+    }
+    if (this.parryCooldown > 0) this.parryCooldown -= dt;
+    
+    this.updateArrowRecharge(dt);
   }
 
   die(game){
@@ -2053,7 +2073,12 @@ class Game {
       if(!this.countdownActive) {
         if (this.isMultiplayer) {
           const oldArrows = this.localFighter.arrows;
+          
+          // Local fighter updates controls, physics, and status timers
           this.localFighter.update(dt, this, this.input, this.remoteFighter);
+          
+          // Remote opponent updates status timers so states like invuln/stun don't get locked permanently
+          this.remoteFighter.updateRemote(dt);
           
           if (this.localFighter.arrows < oldArrows) {
             const firedCharge = this.localFighter.lastFiredCharge;
