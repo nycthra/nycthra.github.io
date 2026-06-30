@@ -1576,7 +1576,7 @@ class Game {
         target.vy = data.vy;
 
         if (!this.isHost) {
-          // If Guest detects that the Host claims someone has died, trigger local death
+          // Check for lethal HP thresholds on sync packets to trigger local match ending routines
           if (this.localFighter.hp > 0 && data.opponentHp <= 0) {
             this.localFighter.die(this);
           } else {
@@ -2081,7 +2081,10 @@ class Game {
           if (this.isMultiplayer) {
             const oldArrows = this.localFighter.arrows;
             
+            // Local fighter updates controls, physics, and status timers
             this.localFighter.update(dt, this, this.input, this.remoteFighter);
+            
+            // Remote opponent updates status timers so states like invuln/stun don't get locked permanently
             this.remoteFighter.updateRemote(dt);
             
             if (this.localFighter.arrows < oldArrows) {
@@ -2221,6 +2224,95 @@ class Game {
               floatActive: this.localFighter.floatActive,
               arrows: this.localFighter.arrows
             });
+          }
+        }
+      }
+
+      // COIN FLIPPING EVALUATION AND ANIMATION SYSTEM
+      if (this.localFighter.isFlippingCoin) {
+        this.localFighter.coinFlipTimer -= dt;
+        const coinGraphic = document.getElementById('coin-graphic');
+        
+        if (this.localFighter.coinFlipTimer > 1.4) {
+          const flicker = Math.floor(performance.now() / 60) % 2 === 0;
+          const txt = document.getElementById('coin-text');
+          txt.textContent = flicker ? "[ YES ]" : "[  NO  ]";
+          txt.style.color = '#fff';
+          txt.style.textShadow = '0 0 10px rgba(255,255,255,0.8)';
+          
+          const angleScale = Math.sin(performance.now() * 0.04);
+          if (coinGraphic) {
+            coinGraphic.style.transform = 'scaleX(' + angleScale + ')';
+            const flickerColor = flicker ? '#be78ff' : '#ff3333';
+            coinGraphic.style.background = flickerColor;
+            coinGraphic.style.borderColor = flickerColor;
+            coinGraphic.style.boxShadow = '0 0 8px ' + flickerColor;
+          }
+          
+          if (Math.floor(performance.now() / 120) % 2 === 0 && Math.random() < 0.2) {
+            audio.tone(800 + Math.random()*400, 0.02, 'sine', 0.02);
+          }
+        } else {
+          if (!this.localFighter.coinHasRolledThisCycle) {
+            this.localFighter.coinHasRolledThisCycle = true;
+            const win = Math.random() < 0.5;
+            const txt = document.getElementById('coin-text');
+            
+            if (coinGraphic) {
+              coinGraphic.style.transform = 'scaleX(1)';
+            }
+            
+            if (win) {
+              this.localFighter.floatReady = true;
+              this.localFighter.isFlippingCoin = false;
+              txt.textContent = "[ YES ]";
+              txt.style.color = '#be78ff';
+              txt.style.textShadow = '0 0 15px #be78ff';
+              
+              if (coinGraphic) {
+                coinGraphic.style.background = '#be78ff';
+                coinGraphic.style.borderColor = '#be78ff';
+                coinGraphic.style.boxShadow = '0 0 12px #be78ff';
+              }
+              
+              this.platformPurpleFlashTimer = 0.5;
+              audio.tone(600, 0.25, 'sine', 0.15, 1200);
+              
+              setTimeout(() => {
+                if (!this.localFighter.isFlippingCoin) {
+                  document.getElementById('coin-container').style.display = 'none';
+                }
+              }, 1500);
+            } else {
+              txt.textContent = "[  NO  ]";
+              txt.style.color = '#ff3333';
+              txt.style.textShadow = '0 0 8px rgba(255,51,51,0.5)';
+              
+              if (coinGraphic) {
+                coinGraphic.style.background = '#ff3333';
+                coinGraphic.style.borderColor = '#ff3333';
+                coinGraphic.style.boxShadow = '0 0 6px #ff3333';
+              }
+              audio.tone(180, 0.15, 'sawtooth', 0.1);
+              this.coinFlipFails++;
+            }
+          }
+        }
+        if (this.localFighter.coinFlipTimer <= 0) {
+          this.localFighter.coinFlipTimer = 2.0;
+          this.localFighter.coinHasRolledThisCycle = false;
+        }
+      }
+
+      if (this.remoteFighter.isFlippingCoin && !this.isMultiplayer) {
+        this.remoteFighter.coinFlipTimer -= dt;
+        if (this.remoteFighter.coinFlipTimer <= 0) {
+          const win = Math.random() < 0.5;
+          if (win) {
+            this.remoteFighter.floatReady = true;
+            this.remoteFighter.isFlippingCoin = false;
+          } else {
+            this.remoteFighter.coinFlipTimer = 2.0;
           }
         }
       }
