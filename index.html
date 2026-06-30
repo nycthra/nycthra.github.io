@@ -191,7 +191,6 @@
     text-shadow: 0 0 10px rgba(136,255,136,0.4);
   }
 
-  /* Main Menu Overlays */
   #menu-overlay {
     position: fixed;
     top: 0; left: 0; width: 100%; height: 100%;
@@ -271,13 +270,11 @@
     50% { opacity: 1; }
   }
 </style>
-<!-- PeerJS Library CDN -->
 <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
 </head>
 <body>
 <canvas id="c"></canvas>
 
-<!-- Main Menu UI -->
 <div id="menu-overlay">
   <h1>N O I R . I O</h1>
   <button class="menu-btn" id="btn-solo">SOLO VS AI</button>
@@ -1006,7 +1003,9 @@ class Fighter {
     const mainColor = flashBlack ? '#000' : '#fff';
     const shadowColorValue = flashBlack ? 'transparent' : '#fff';
 
-    if(!this.isAI && (!game.isMultiplayer || game.localPlayerIsLeft === (this.x < game.arena.width / 2))){
+    // Verification check for local player indicator arrow
+    const isPlayerSelf = !this.isAI && (!game.isMultiplayer || (game.localPlayerIsLeft === (this === game.player)));
+    if(isPlayerSelf){
       ctx.save();
       ctx.translate(sx, sy - this.h - 20);
       const bob = Math.sin(performance.now() / 220) * 2;
@@ -1159,7 +1158,8 @@ class Fighter {
       ctx.restore();
     }
 
-    if(!this.isAI && !this.dead && !flashBlack) {
+    // Bug Fix 2: Arrows are now only rendered below the client's local fighter
+    if(isPlayerSelf && !this.dead && !flashBlack) {
       const pipW = 6;
       const pipH = 3;
       const gap = 3;
@@ -1495,7 +1495,6 @@ class Game {
       this.isMultiplayer = true;
       status.textContent = 'OPPONENT DETECTED. PREPARING MATCH...';
       
-      // Randomize spawning side configuration
       this.localPlayerIsLeft = Math.random() < 0.5;
       
       this.conn.on('open', () => {
@@ -1543,6 +1542,7 @@ class Game {
         target.y = data.y;
         target.vx = data.vx;
         target.vy = data.vy;
+        target.hp = data.hp; // Fixed Bug 1: Real-time HP sync enabled
         target.facing = data.facing;
         target.aimAngle = data.aimAngle;
         target.charging = data.charging;
@@ -1551,8 +1551,9 @@ class Game {
         target.floatActive = data.floatActive;
         target.arrows = data.arrows;
       }
+      // Fixed Bug 1: Hits are now applied directly to the player receiving the packet
       else if (data.type === 'hit') {
-        const target = this.localPlayerIsLeft ? this.player : this.enemy;
+        const target = this.localPlayerIsLeft ? this.enemy : this.player;
         target.takeHit(data.knockback, data.dir, data.dmg, null, this, data.vx, data.vy);
       }
       else if (data.type === 'arrow_fire') {
@@ -1585,7 +1586,7 @@ class Game {
       this.localRematchReady = false;
       this.remoteRematchReady = false;
       
-      if (this.peer.id) { // Host resolves side randomization for next match
+      if (this.peer.id) { 
         this.localPlayerIsLeft = Math.random() < 0.5;
         this.conn.send({
           type: 'side_assignment',
@@ -1967,12 +1968,11 @@ class Game {
   }
 
   updateHUD(){
-    const localFighter = this.localPlayerIsLeft ? this.player : this.enemy;
-    const remoteFighter = this.localPlayerIsLeft ? this.enemy : this.player;
-
-    document.getElementById('pdmg').textContent = Math.round(localFighter.hp) + ' HP';
-    document.getElementById('edmg').textContent = Math.round(remoteFighter.hp) + ' HP';
+    // Bug Fix 1: Left HUD elements strictly display Left Fighter data, and Right strictly displays Right Fighter data
+    document.getElementById('pdmg').textContent = Math.round(this.player.hp) + ' HP';
+    document.getElementById('edmg').textContent = Math.round(this.enemy.hp) + ' HP';
     
+    const localFighter = this.localPlayerIsLeft ? this.player : this.enemy;
     const pct = localFighter.floatActive ? (localFighter.floatTime/localFighter.floatMax) : (localFighter.floatReady ? 1 : 0);
     document.getElementById('floatfill').style.width = Math.max(0,Math.min(1,pct))*100+'%';
     document.getElementById('ammocount').textContent = localFighter.arrows + ' / ' + localFighter.maxArrows;
@@ -2025,7 +2025,6 @@ class Game {
       dt *= 0.05;
     }
 
-    // Capture Local Entities
     const localFighter = this.localPlayerIsLeft ? this.player : this.enemy;
     const remoteFighter = this.localPlayerIsLeft ? this.enemy : this.player;
 
@@ -2053,12 +2052,14 @@ class Game {
             });
           }
 
+          // Bug Fix 1: Added localFighter.hp to frame sync packet
           this.conn.send({
             type: 'sync',
             x: localFighter.x,
             y: localFighter.y,
             vx: localFighter.vx,
             vy: localFighter.vy,
+            hp: localFighter.hp,
             facing: localFighter.facing,
             aimAngle: localFighter.aimAngle,
             charging: localFighter.charging,
@@ -2270,11 +2271,9 @@ class Game {
     ctx.save();
     const barHeight = 24;
     
-    const localFighter = this.localPlayerIsLeft ? this.player : this.enemy;
-    const remoteFighter = this.localPlayerIsLeft ? this.enemy : this.player;
-
-    const pPct = (localFighter && localFighter.maxHp) ? Math.max(0, Math.min(1, localFighter.hp / localFighter.maxHp)) : 1;
-    const ePct = (remoteFighter && remoteFighter.maxHp) ? Math.max(0, Math.min(1, remoteFighter.hp / remoteFighter.maxHp)) : 1;
+    // Bug Fix 1: Left health bar strictly displays Left Fighter (player) HP, and Right displays Right Fighter (enemy) HP
+    const pPct = (this.player && this.player.maxHp) ? Math.max(0, Math.min(1, this.player.hp / this.player.maxHp)) : 1;
+    const ePct = (this.enemy && this.enemy.maxHp) ? Math.max(0, Math.min(1, this.enemy.hp / this.enemy.maxHp)) : 1;
 
     ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
     ctx.beginPath();
